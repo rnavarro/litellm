@@ -231,6 +231,33 @@ def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> d
         return {}
 
 
+# Case-insensitive substrings of upstream response header names worth persisting
+# to spend logs, for quota / rate-limit / subscription observability. An
+# allow-list keeps transport noise (date, server, cf-*, CORS, hop-by-hop) and
+# sensitive headers (set-cookie, x-clerk-auth-*) out of the metrics DB by default.
+_PROVIDER_RESPONSE_HEADER_KEEP_SUBSTRINGS = (
+    "quota",
+    "ratelimit",
+    "rate-limit",
+    "credit",
+    "usage",
+    "remaining",
+    "reset",
+    "retry-after",
+    "subscription",
+    "request-id",
+)
+
+
+def _filter_provider_response_headers(headers: dict) -> Optional[dict]:
+    filtered = {
+        k: v
+        for k, v in headers.items()
+        if any(tok in k.lower() for tok in _PROVIDER_RESPONSE_HEADER_KEEP_SUBSTRINGS)
+    }
+    return filtered or None
+
+
 def get_logging_payload(  # noqa: PLR0915
     kwargs, response_obj, start_time, end_time
 ) -> SpendLogsPayload:
@@ -326,10 +353,13 @@ def get_logging_payload(  # noqa: PLR0915
     if standard_logging_payload is not None:
         hidden_params = standard_logging_payload.get("hidden_params", {})
         litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
-        # Extract upstream provider response headers from additional_headers
+        # Extract upstream provider response headers from additional_headers,
+        # keeping only quota/rate-limit/subscription-relevant headers.
         additional_headers = hidden_params.get("additional_headers", {}) or {}
         if additional_headers:
-            provider_response_headers = dict(additional_headers)
+            provider_response_headers = _filter_provider_response_headers(
+                additional_headers
+            )
 
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(

@@ -384,6 +384,20 @@ def get_logging_payload(  # noqa: PLR0915
                 additional_headers, litellm_params.get("api_base")
             )
 
+    # Z.AI exposes no quota headers; stamp the background-polled quota cache onto
+    # its rows so it lands in the same provider_response_headers shape as the others.
+    _api_base = litellm_params.get("api_base") or ""
+    if "api.z.ai" in _api_base:
+        from litellm.proxy.hooks.zai_quota_poller import get_cached_zai_quota
+
+        _zai = get_cached_zai_quota()
+        if _zai.get("data"):
+            provider_response_headers = {
+                "llm_provider-x-zai-quota": json.dumps(
+                    {**_zai["data"], "fetched_at": _zai["fetched_at"]}
+                )
+            }
+
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         metadata,

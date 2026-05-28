@@ -79,6 +79,7 @@ def _get_spend_logs_metadata(
     cold_storage_object_key: Optional[str] = None,
     litellm_overhead_time_ms: Optional[float] = None,
     cost_breakdown: Optional[CostBreakdown] = None,
+    provider_response_headers: Optional[dict] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -109,6 +110,7 @@ def _get_spend_logs_metadata(
             attempted_retries=None,
             max_retries=None,
             cost_breakdown=None,
+            provider_response_headers=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -133,6 +135,7 @@ def _get_spend_logs_metadata(
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
     clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
     clean_metadata["cost_breakdown"] = cost_breakdown
+    clean_metadata["provider_response_headers"] = provider_response_headers
 
     return clean_metadata
 
@@ -228,6 +231,56 @@ def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> d
         return {}
 
 
+# Quota/billing response headers to persist to spend logs, per provider. There
+# is no naming convention across providers, so each is listed explicitly and
+# keyed by a substring of the upstream `api_base` (custom_llm_provider is
+# "openai" for every openai-compatible upstream here, so it can't discriminate).
+# Header names are the upstream names; LiteLLM prefixes them with "llm_provider-"
+# in additional_headers, which is stripped before matching. Everything else
+# (transport noise, set-cookie, x-clerk-auth-*) is dropped. To discover a new
+# provider's headers, probe its raw response headers and add them here.
+_PROVIDER_RESPONSE_HEADERS_BY_API_BASE: dict = {
+    # Synthetic — single JSON blob with subscription/search/weekly-credit state.
+    "api.synthetic.new": {"x-synthetic-quotas"},
+    # NeuralWatt — energy-based metering, one value per header.
+    "api.neuralwatt.com": {
+        "x-budget-remaining-usd",
+        "x-allowance-remaining-usd",
+        "x-energy-used",
+        "x-energy-included",
+        "x-energy-remaining",
+        "x-request-cost-usd",
+        "x-cache-savings-usd",
+        "x-subscription-plan",
+    },
+    # Wafer (pass.wafer.ai) and Z.AI (api.z.ai) exposed no quota headers as of
+    # 2026-05-27. Add an entry here if that changes.
+}
+
+
+def _filter_provider_response_headers(
+    headers: dict, api_base: Optional[str]
+) -> Optional[dict]:
+    if not api_base:
+        return None
+    wanted = next(
+        (
+            names
+            for host, names in _PROVIDER_RESPONSE_HEADERS_BY_API_BASE.items()
+            if host in api_base
+        ),
+        None,
+    )
+    if not wanted:
+        return None
+    filtered = {
+        k: v
+        for k, v in headers.items()
+        if k.lower().removeprefix("llm_provider-") in wanted
+    }
+    return filtered or None
+
+
 def get_logging_payload(  # noqa: PLR0915
     kwargs, response_obj, start_time, end_time
 ) -> SpendLogsPayload:
@@ -319,9 +372,31 @@ def get_logging_payload(  # noqa: PLR0915
 
     # Extract overhead from hidden_params if available
     litellm_overhead_time_ms = None
+    provider_response_headers = None
     if standard_logging_payload is not None:
         hidden_params = standard_logging_payload.get("hidden_params", {})
         litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
+        # Extract upstream provider response headers from additional_headers,
+        # keeping only the quota/billing headers configured for this provider.
+        additional_headers = hidden_params.get("additional_headers", {}) or {}
+        if additional_headers:
+            provider_response_headers = _filter_provider_response_headers(
+                additional_headers, litellm_params.get("api_base")
+            )
+
+    # Z.AI exposes no quota headers; stamp the background-polled quota cache onto
+    # its rows so it lands in the same provider_response_headers shape as the others.
+    _api_base = litellm_params.get("api_base") or ""
+    if "api.z.ai" in _api_base:
+        from litellm.proxy.hooks.zai_quota_poller import get_cached_zai_quota
+
+        _zai = get_cached_zai_quota()
+        if _zai.get("data"):
+            provider_response_headers = {
+                "llm_provider-x-zai-quota": json.dumps(
+                    {**_zai["data"], "fetched_at": _zai["fetched_at"]}
+                )
+            }
 
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
@@ -378,6 +453,7 @@ def get_logging_payload(  # noqa: PLR0915
             if standard_logging_payload is not None
             else None
         ),
+        provider_response_headers=provider_response_headers,
     )
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]

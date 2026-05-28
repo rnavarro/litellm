@@ -7447,6 +7447,25 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
+        ### POLL Z.AI QUOTA ###
+        # Z.AI exposes quota only via a side endpoint (no response headers), so we
+        # poll it on an interval and cache it; spend_tracking_utils stamps the cached
+        # value onto Z.AI spend-log rows. No-op when ZAI_API_KEY is unset.
+        if os.environ.get("ZAI_API_KEY"):
+            from litellm.proxy.hooks.zai_quota_poller import poll_zai_quota
+
+            scheduler.add_job(
+                poll_zai_quota,
+                "interval",
+                seconds=int(os.environ.get("ZAI_QUOTA_POLL_SECONDS", "30")),
+                # Run immediately at startup so the cache is warm before the first
+                # request, instead of waiting one full interval (cold-cache window).
+                next_run_time=datetime.now(),
+                id="zai_quota_poll_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            )
+
         ### UPDATE DAILY TAG SPEND (separate scheduler job with longer interval) ###
         ## Reduces QPS as there are more tags for a single request
         tag_spend_update_interval = int(

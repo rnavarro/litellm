@@ -3531,6 +3531,9 @@ class SpendLogsMetadata(TypedDict):
     cost_breakdown: Optional[
         CostBreakdown
     ]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
+    provider_response_headers: Optional[
+        dict
+    ]  # Upstream provider response headers (e.g. x-synthetic-quotas, x-ratelimit-*)
 
 
 class SpendLogsPayload(TypedDict):

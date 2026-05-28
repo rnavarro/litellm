@@ -246,6 +246,13 @@ _PROVIDER_RESPONSE_HEADER_KEEP_SUBSTRINGS = (
     "retry-after",
     "subscription",
     "request-id",
+    # NeuralWatt energy-based metering (x-energy-*, x-budget-*, x-allowance-*,
+    # x-request-cost-usd, x-cache-savings-usd).
+    "energy",
+    "budget",
+    "allowance",
+    "cost",
+    "savings",
 )
 
 

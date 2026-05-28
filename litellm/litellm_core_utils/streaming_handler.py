@@ -269,7 +269,10 @@ class CustomStreamWrapper:
         if len(self.chunks) < 2:
             return
 
-        last_content = self.chunks[-1].choices[0].delta.content
+        # Chunks can carry an empty choices list (e.g. the final usage-only chunk
+        # when stream_options.include_usage is set), so guard the [0] index.
+        last_choices = self.chunks[-1].choices
+        last_content = last_choices[0].delta.content if last_choices else None
 
         if (
             last_content is None
@@ -279,7 +282,10 @@ class CustomStreamWrapper:
             self._repeated_messages_count = 1
             return
 
-        second_to_last_content = self.chunks[-2].choices[0].delta.content
+        second_to_last_choices = self.chunks[-2].choices
+        second_to_last_content = (
+            second_to_last_choices[0].delta.content if second_to_last_choices else None
+        )
 
         if last_content == second_to_last_content:
             self._repeated_messages_count += 1

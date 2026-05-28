@@ -7458,6 +7458,9 @@ class ProxyStartupEvent:
                 poll_zai_quota,
                 "interval",
                 seconds=int(os.environ.get("ZAI_QUOTA_POLL_SECONDS", "30")),
+                # Run immediately at startup so the cache is warm before the first
+                # request, instead of waiting one full interval (cold-cache window).
+                next_run_time=datetime.now(),
                 id="zai_quota_poll_job",
                 replace_existing=True,
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,

@@ -231,36 +231,52 @@ def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> d
         return {}
 
 
-# Case-insensitive substrings of upstream response header names worth persisting
-# to spend logs, for quota / rate-limit / subscription observability. An
-# allow-list keeps transport noise (date, server, cf-*, CORS, hop-by-hop) and
-# sensitive headers (set-cookie, x-clerk-auth-*) out of the metrics DB by default.
-_PROVIDER_RESPONSE_HEADER_KEEP_SUBSTRINGS = (
-    "quota",
-    "ratelimit",
-    "rate-limit",
-    "credit",
-    "usage",
-    "remaining",
-    "reset",
-    "retry-after",
-    "subscription",
-    "request-id",
-    # NeuralWatt energy-based metering (x-energy-*, x-budget-*, x-allowance-*,
-    # x-request-cost-usd, x-cache-savings-usd).
-    "energy",
-    "budget",
-    "allowance",
-    "cost",
-    "savings",
-)
+# Quota/billing response headers to persist to spend logs, per provider. There
+# is no naming convention across providers, so each is listed explicitly and
+# keyed by a substring of the upstream `api_base` (custom_llm_provider is
+# "openai" for every openai-compatible upstream here, so it can't discriminate).
+# Header names are the upstream names; LiteLLM prefixes them with "llm_provider-"
+# in additional_headers, which is stripped before matching. Everything else
+# (transport noise, set-cookie, x-clerk-auth-*) is dropped. To discover a new
+# provider's headers, probe its raw response headers and add them here.
+_PROVIDER_RESPONSE_HEADERS_BY_API_BASE: dict = {
+    # Synthetic — single JSON blob with subscription/search/weekly-credit state.
+    "api.synthetic.new": {"x-synthetic-quotas"},
+    # NeuralWatt — energy-based metering, one value per header.
+    "api.neuralwatt.com": {
+        "x-budget-remaining-usd",
+        "x-allowance-remaining-usd",
+        "x-energy-used",
+        "x-energy-included",
+        "x-energy-remaining",
+        "x-request-cost-usd",
+        "x-cache-savings-usd",
+        "x-subscription-plan",
+    },
+    # Wafer (pass.wafer.ai) and Z.AI (api.z.ai) exposed no quota headers as of
+    # 2026-05-27. Add an entry here if that changes.
+}
 
 
-def _filter_provider_response_headers(headers: dict) -> Optional[dict]:
+def _filter_provider_response_headers(
+    headers: dict, api_base: Optional[str]
+) -> Optional[dict]:
+    if not api_base:
+        return None
+    wanted = next(
+        (
+            names
+            for host, names in _PROVIDER_RESPONSE_HEADERS_BY_API_BASE.items()
+            if host in api_base
+        ),
+        None,
+    )
+    if not wanted:
+        return None
     filtered = {
         k: v
         for k, v in headers.items()
-        if any(tok in k.lower() for tok in _PROVIDER_RESPONSE_HEADER_KEEP_SUBSTRINGS)
+        if k.lower().removeprefix("llm_provider-") in wanted
     }
     return filtered or None
 
@@ -361,11 +377,11 @@ def get_logging_payload(  # noqa: PLR0915
         hidden_params = standard_logging_payload.get("hidden_params", {})
         litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
         # Extract upstream provider response headers from additional_headers,
-        # keeping only quota/rate-limit/subscription-relevant headers.
+        # keeping only the quota/billing headers configured for this provider.
         additional_headers = hidden_params.get("additional_headers", {}) or {}
         if additional_headers:
             provider_response_headers = _filter_provider_response_headers(
-                additional_headers
+                additional_headers, litellm_params.get("api_base")
             )
 
     # clean up litellm metadata

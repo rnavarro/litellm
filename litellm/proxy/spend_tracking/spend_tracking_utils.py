@@ -79,6 +79,7 @@ def _get_spend_logs_metadata(
     cold_storage_object_key: Optional[str] = None,
     litellm_overhead_time_ms: Optional[float] = None,
     cost_breakdown: Optional[CostBreakdown] = None,
+    provider_response_headers: Optional[dict] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -109,6 +110,7 @@ def _get_spend_logs_metadata(
             attempted_retries=None,
             max_retries=None,
             cost_breakdown=None,
+            provider_response_headers=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -133,6 +135,7 @@ def _get_spend_logs_metadata(
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
     clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
     clean_metadata["cost_breakdown"] = cost_breakdown
+    clean_metadata["provider_response_headers"] = provider_response_headers
 
     return clean_metadata
 
@@ -319,9 +322,14 @@ def get_logging_payload(  # noqa: PLR0915
 
     # Extract overhead from hidden_params if available
     litellm_overhead_time_ms = None
+    provider_response_headers = None
     if standard_logging_payload is not None:
         hidden_params = standard_logging_payload.get("hidden_params", {})
         litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
+        # Extract upstream provider response headers from additional_headers
+        additional_headers = hidden_params.get("additional_headers", {}) or {}
+        if additional_headers:
+            provider_response_headers = dict(additional_headers)
 
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
@@ -378,6 +386,7 @@ def get_logging_payload(  # noqa: PLR0915
             if standard_logging_payload is not None
             else None
         ),
+        provider_response_headers=provider_response_headers,
     )
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]

@@ -340,6 +340,7 @@ class StandardBuiltInToolCostTracking:
                 if (
                     hasattr(usage, "server_tool_use")
                     and usage.server_tool_use is not None
+                    and hasattr(usage.server_tool_use, "web_search_requests")
                     and usage.server_tool_use.web_search_requests is not None
                 ):
                     return True
@@ -353,6 +354,7 @@ class StandardBuiltInToolCostTracking:
             if (
                 hasattr(usage, "server_tool_use")
                 and usage.server_tool_use is not None
+                and hasattr(usage.server_tool_use, "web_search_requests")
                 and usage.server_tool_use.web_search_requests is not None
             ):
                 return True
